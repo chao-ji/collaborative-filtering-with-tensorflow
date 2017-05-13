@@ -16,11 +16,6 @@ class MiniBatchFeeder(object):
         self.batch_size = batch_size
         self.counter = 0
         self.shuffle_data = shuffle_data
-
-        self.data[:, 0] = self.data[:, 0].astype(np.int32) - 1
-        self.data[:, 1] = self.data[:, 1].astype(np.int32) - 1
-        self.data[:, 2] = self.data[:, 2].astype(np.float32)
-
         self.reset_counter()
 
     def _shuffle(self, seed=42):
@@ -52,7 +47,7 @@ class CollaborativeFilter(object):
                  num_user,
                  num_item,
                  num_dim=20,
-                 num_epoch=200,
+                 num_epoch=100,
                  device="/gpu:0",
                  learning_rate=0.001,
                  reg=0.05):
@@ -66,7 +61,8 @@ class CollaborativeFilter(object):
         self.learning_rate = learning_rate
         self.reg = reg
 
-        self.bias_, self.bias_user_, self.bias_item_, self.embd_user_, self.embd_item_ = None, None, None, None, None 
+        self.bias_, self.bias_user_, self.bias_item_, self.embd_user_, self.embd_item_ = self._create_param_tensors()
+        self.embds_ = None
 
     def _create_param_tensors(self):
         with tf.device("/cpu:0") :
@@ -78,27 +74,15 @@ class CollaborativeFilter(object):
 
         return bias, bias_user, bias_item, embd_user, embd_item
 
-    def _create_batch_tensors(self, user_batch_index, item_batch_index):
-        with tf.device("/cpu:0"):
-            bias_user_batch = tf.nn.embedding_lookup(params=self.bias_user_, ids=user_batch_index, name="bias_user_batch")
-            bias_item_batch = tf.nn.embedding_lookup(params=self.bias_item_, ids=item_batch_index, name="bias_item_batch")
-
-            embd_user_batch = tf.nn.embedding_lookup(params=self.embd_user_, ids=user_batch_index, name="embd_user_batch")
-            embd_item_batch = tf.nn.embedding_lookup(params=self.embd_item_, ids=item_batch_index, name="embd_item_batch")
-
-        return bias_user_batch, bias_item_batch, embd_user_batch, embd_item_batch
 
     def _create_op_tensors(self, user_batch_index, item_batch_index, rating_batch):
+
+        rating_pred, (bias_user_batch, bias_item_batch, embd_user_batch, embd_item_batch) = self._create_pred_tensor(user_batch_index, item_batch_index)
+
         global_step = tf.train.get_global_step()
         assert global_step is not None
 
-        bias_user_batch, bias_item_batch, embd_user_batch, embd_item_batch = self._create_batch_tensors(user_batch_index, item_batch_index)
-
         with tf.device(self.device):
-            rating_pred = tf.reduce_sum(tf.multiply(embd_user_batch, embd_item_batch), 1)
-            rating_pred = tf.add(rating_pred, self.bias_)
-            rating_pred = tf.add(rating_pred, bias_user_batch)
-            rating_pred = tf.add(rating_pred, bias_item_batch, name="rating_pred")
             
             loss_error = tf.nn.l2_loss(tf.subtract(rating_pred, rating_batch))
 
@@ -111,8 +95,23 @@ class CollaborativeFilter(object):
             loss = tf.add(loss_error, loss_reg)
             train_op = tf.train.AdamOptimizer(self.learning_rate).minimize(loss, global_step=global_step)
 
-        return loss, rating_pred, train_op
+        return train_op
             
+    def _create_pred_tensor(self, user_batch_index, item_batch_index):
+        with tf.device(self.device):
+            bias_user_batch = tf.nn.embedding_lookup(params=self.bias_user_, ids=user_batch_index, name="bias_user_batch")
+            bias_item_batch = tf.nn.embedding_lookup(params=self.bias_item_, ids=item_batch_index, name="bias_item_batch")
+
+            embd_user_batch = tf.nn.embedding_lookup(params=self.embd_user_, ids=user_batch_index, name="embd_user_batch")
+            embd_item_batch = tf.nn.embedding_lookup(params=self.embd_item_, ids=item_batch_index, name="embd_item_batch")
+
+            rating_pred = tf.reduce_sum(tf.multiply(embd_user_batch, embd_item_batch), 1)
+            rating_pred = tf.add(rating_pred, self.bias_)
+            rating_pred = tf.add(rating_pred, bias_user_batch)
+            rating_pred = tf.add(rating_pred, bias_item_batch, name="rating_pred") 
+
+        return rating_pred, (bias_user_batch, bias_item_batch, embd_user_batch, embd_item_batch)
+
     def fit(self, train_data, test_data=None):
 
         user_batch_index = tf.placeholder(tf.int32, name="user_batch_index")
@@ -121,52 +120,69 @@ class CollaborativeFilter(object):
         
         global_step = tf.contrib.framework.get_or_create_global_step()
 
-        self.bias_, self.bias_user_, self.bias_item_, self.embd_user_, self.embd_item_ = self._create_param_tensors()
-        loss, rating_pred, train_op = self._create_op_tensors(user_batch_index, item_batch_index, rating_batch)
+        rating_pred, _ = self._create_pred_tensor(user_batch_index, item_batch_index)
+        train_op = self._create_op_tensors(user_batch_index, item_batch_index, rating_batch)
+
         init_op = tf.global_variables_initializer()
-        
+
         with tf.Session() as sess:
             sess.run(init_op)
             for i in range(self.num_epoch):
                 print i
 
-                pred = []
-                true = []
-
                 train_data.reset_counter()
                 for batch in train_data:
-                    _, y_ = sess.run([train_op, rating_pred], feed_dict={user_batch_index: batch[:, 0],
+                    sess.run(train_op, feed_dict={user_batch_index: batch[:, 0],
                                                                  item_batch_index: batch[:, 1],
                                                                  rating_batch: batch[:, 2]})
 
-                    pred.extend(y_)
-                    true.extend(list(batch[:, 2]))
+                train_pred, train_true = self._eval(sess, rating_pred, train_data, user_batch_index, item_batch_index, with_target=True)
+                test_pred, test_true = self._eval(sess, rating_pred, test_data, user_batch_index, item_batch_index, with_target=True)
 
-                
-                pred = np.clip(np.array(pred), 1.0, 5.0)
-                true = np.array(true)
+                print "%f\t%f" % (np.sqrt(np.mean(np.square(train_pred - train_true))), np.sqrt(np.mean(np.square(test_pred - test_true))))
 
-                train_rmse = np.sqrt(np.mean(np.square(pred - true)))
+            self.embds_ = dict(zip(["bias", "bias_user", "bias_item", "embd_user", "embd_item"],
+                               sess.run([self.bias_, self.bias_user_, self.bias_item_, self.embd_user_, self.embd_item_])))
 
+    def predict(self, test_data):
+        pred = []
+        true = []
 
-                pred = []
-                true = []
+        test_data.reset_counter()
+        for batch in test_data:
+            user_ids = batch[:, 0]
+            item_ids = batch[:, 1]
 
-                test_data.reset_counter()
-                for batch in test_data:
-                    y_ = sess.run(rating_pred, feed_dict={user_batch_index: batch[:, 0],
-                                                          item_batch_index: batch[:, 1],
-                                                          rating_batch: batch[:, 2]})
-                    pred.extend(y_)
-                    true.extend(list(batch[:, 2]))
+            bias = self.embds_["bias"]
+            bias_user = self.embds_["bias_user"][user_ids]
+            bias_item = self.embds_["bias_item"][item_ids]
 
-                pred = np.clip(np.array(pred), 1.0, 5.0)
-                true = np.array(true)
-
-                test_rmse = np.sqrt(np.mean(np.square(pred - true)))
-                print "%f\t%f" % (train_rmse, test_rmse)
-
-    def predict(self):
-        pass
+            embd_user = self.embds_["embd_user"][user_ids, :]
+            embd_item = self.embds_["embd_item"][item_ids, :]
 
 
+            pred.extend(list(np.sum(embd_user * embd_item, axis=1) + bias_user + bias_item + bias))
+            true.extend(list(batch[:, 2]))
+
+        pred = np.clip(np.array(pred), 1.0, 5.0)
+        true = np.array(true)
+        print "%f" % np.sqrt(np.mean(np.square(pred - true)))
+
+        return pred, true
+
+    def _eval(self, sess, rating_pred, data, user_batch_index, item_batch_index, with_target=False):
+        pred = []
+        true = []
+ 
+        data.reset_counter()
+        for batch in data:
+            y_ = sess.run(rating_pred, feed_dict={user_batch_index: batch[:, 0],
+                                                  item_batch_index: batch[:, 1]})
+            pred.extend(y_)
+            if with_target:
+                true.extend(list(batch[:, 2]))        
+
+        pred = np.clip(np.array(pred), 1.0, 5.0)
+        true = np.array(true)
+        return pred, true
+        
