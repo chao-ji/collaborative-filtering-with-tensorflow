@@ -12,7 +12,7 @@ This implementation minimizes the loss function defined in Eq. 5 in this article
 The model was evaluated using the [MovieLens 1M](https://grouplens.org/datasets/movielens/1m/) dataset. In addition to computing RMSE as the evaluation metric, I performed on exploratory data analysis on the movie and users embeddings. Some quick results:
 
 1. Group pairs of movies by the number of shared genre types (e.g. movie 1: [War|Action], movie 2: [Action|Thiller], shared genre types is  1), and compute the avarege pairwise cosine similarity of movie embeddings for each group.
-<img source="https://github.com/chao-ji/collaborative-filtering-with-tensorflow/blob/master/shared%20genre%20types.png">
+<img source="https://github.com/chao-ji/collaborative-filtering-with-tensorflow/blob/master/shared%20genre%20types.png?raw=true">
 
 
 ## What's next:
