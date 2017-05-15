@@ -4,7 +4,7 @@ This work was inspired by [TF-recomm](https://github.com/songgc/TF-recomm). Rath
 
 ## Collaborative Filering based on Latent Factor Model
 
-In this formulation, users and items are mapped to vectors $$p\_{u}$$ and $q\_{i}$ in the same latent factor space $\mathbb{R}$, 
+In this formulation, users and items are mapped to vectors $[\![e]\!]$ and $q\_{i}$ in the same latent factor space $\mathbb{R}$, 
 
 ```tex
 $p\_{u}$
