@@ -6,7 +6,7 @@ This work was inspired by [TF-recomm](https://github.com/songgc/TF-recomm). Rath
 
 In this formulation, users and items are mapped to vectors $p\_{u}$ and $q\_{i}$ in the same latent factor space $\mathbb{R}$, 
 
-```math
+```tex
 $p\_{u}$
 ```
 
